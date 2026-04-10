@@ -1,8 +1,11 @@
 import os
+from dotenv import load_dotenv
 import time
 import json
 from locust import HttpUser, FastHttpUser, task, between, events
 import requests.exceptions
+
+load_dotenv()  # Load variables from .env
 
 class LLMLoadTestUser(FastHttpUser):
     host = "https://www.sophnet.com"
@@ -33,7 +36,7 @@ class LLMLoadTestUser(FastHttpUser):
             "stream": True,
             # 兼容 OpenAI 格式的网关，要求在最后一个 chunk 返回 usage 统计
             "stream_options": {"include_usage": True},
-            "max_tokens": 2000
+            "max_tokens": 500
         }
 
         start_time = time.time()
@@ -74,16 +77,19 @@ class LLMLoadTestUser(FastHttpUser):
                             try:
                                 data = json.loads(decoded_line[6:])
 
-                                # 1. 捕捉 TTFT (首字延迟)
+                                # 1. 捕捉 TTFT (首字延迟，包含思考内容)
                                 choices = data.get("choices", [])
-                                if first_token_time is None and choices and choices[0].get("delta", {}).get("content"):
-                                    first_token_time = time.time()
-                                    ttft_ms = int((first_token_time - start_time) * 1000)
-                                    events.request.fire(request_type="Metric", name="1_TTFT_首字时延(ms)", response_time=ttft_ms, response_length=0, exception=None, context={})
+                                if choices:
+                                    delta = choices[0].get("delta", {})
+                                    # 只要有 content 或 reasoning_content 就算首字到达
+                                    if first_token_time is None and (delta.get("content") or delta.get("reasoning_content")):
+                                        first_token_time = time.time()
+                                        ttft_ms = int((first_token_time - start_time) * 1000)
+                                        events.request.fire(request_type="Metric", name="1_TTFT_首字时延(ms)", response_time=ttft_ms, response_length=0, exception=None, context={})
 
-                                # 统计有效 chunk 数量兜底
-                                if choices and choices[0].get("delta", {}).get("content"):
-                                    chunk_count += 1
+                                    # 统计有效 chunk 数量（用于在没有 usage 时估算总 Token）
+                                    if delta.get("content") or delta.get("reasoning_content"):
+                                        chunk_count += 1
 
                                 # 2. 捕捉 Usage (Token 统计)
                                 if "usage" in data and data["usage"]:
