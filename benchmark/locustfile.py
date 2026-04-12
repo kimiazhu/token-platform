@@ -1,11 +1,170 @@
 import os
+import random
+import sys
 from dotenv import load_dotenv
 import time
 import json
+import threading
 from locust import HttpUser, FastHttpUser, task, between, events
+from locust import argument_parser
 import requests.exceptions
 
 load_dotenv()  # Load variables from .env
+
+# ── ShareGPT Dataset 支持 ─────────────────────────────────────────────
+# 命令行参数：
+#   --dataset        本地 ShareGPT JSON 文件路径
+#   --dataset-size   从数据集中采样的条目数量（0 = 全量，默认 1000）
+#   --min-tokens     过滤掉 prompt 字符数少于此值的条目（默认 0，不过滤）
+# 示例：
+#   locust -f benchmark/locustfile.py --dataset /path/to/ShareGPT_V3.json
+
+@events.init_command_line_parser.add_listener
+def add_custom_arguments(parser, **kwargs):
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="",
+        help="本地 ShareGPT JSON 文件路径（不设置则使用固定 prompt）",
+        env_var="LOCUST_DATASET",
+    )
+    parser.add_argument(
+        "--dataset-size",
+        type=int,
+        default=1000,
+        help="从数据集中采样的条目数量（0 = 全量，默认 1000）",
+        env_var="LOCUST_DATASET_SIZE",
+    )
+    parser.add_argument(
+        "--min-tokens",
+        type=int,
+        default=0,
+        help="过滤掉字符数少于此值的 prompt（默认 0，不过滤）",
+        env_var="LOCUST_MIN_TOKENS",
+    )
+
+# 全局 prompt 列表，由 test_start 加载
+_prompt_pool: list[str] = []
+_prompt_pool_lock = threading.Lock()
+
+
+def _load_sharegpt_dataset(path: str, size: int, min_chars: int) -> list[str]:
+    """从 ShareGPT JSON 文件中加载 human 侧的第一轮消息，构建 prompt 池。
+
+    ShareGPT 格式：
+    [
+      {"id": "...", "conversations": [
+        {"from": "human", "value": "..."},
+        {"from": "gpt",   "value": "..."},
+        ...
+      ]},
+      ...
+    ]
+
+    只取每个对话的第一条 human 消息，过滤空消息和过短消息。
+    """
+    print(f"[Dataset] 正在加载 ShareGPT 数据集: {path}")
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    prompts = []
+    for item in data:
+        convs = item.get("conversations", [])
+        for turn in convs:
+            if turn.get("from") == "human":
+                text = (turn.get("value") or "").strip()
+                if text and len(text) >= min_chars:
+                    prompts.append(text)
+                break  # 只取第一轮 human 消息
+
+    # 随机打乱后按 size 截取
+    random.shuffle(prompts)
+    if size > 0:
+        prompts = prompts[:size]
+
+    print(f"[Dataset] 加载完成：共 {len(prompts)} 条 prompt（原始 {len(data)} 条对话）")
+    return prompts
+
+
+def _get_prompt(env) -> str:
+    """返回一条待发送的 prompt 文本。
+
+    若 prompt 池非空则随机采样；否则返回默认固定 prompt。
+    """
+    with _prompt_pool_lock:
+        if _prompt_pool:
+            return random.choice(_prompt_pool)
+    # 回退：使用固定 prompt
+    return f"请详细分析人工智能在未来医疗领域的应用，至少输出1000字。时间戳：{time.time()}"
+
+# ── 全局统计计数器（线程安全）──────────────────────────────────────────
+_stats_lock = threading.Lock()
+_total_requests = 0          # 成功完成的请求总数
+_total_output_tokens = 0     # 所有请求的 completion_tokens 累计
+_total_tokens = 0            # 所有请求的 prompt+completion tokens 累计
+_test_start_time = None      # 测试开始时间（由 test_start 事件写入）
+
+@events.test_start.add_listener
+def on_test_start(environment, **kwargs):
+    global _test_start_time, _total_requests, _total_output_tokens, _total_tokens, _prompt_pool
+    with _stats_lock:
+        _test_start_time = time.time()
+        _total_requests = 0
+        _total_output_tokens = 0
+        _total_tokens = 0
+
+    # 加载 ShareGPT 数据集（仅在 master / standalone 节点加载一次）
+    dataset_path = getattr(environment.parsed_options, "dataset", "")
+    dataset_size = getattr(environment.parsed_options, "dataset_size", 1000)
+    min_tokens = getattr(environment.parsed_options, "min_tokens", 0)
+    if dataset_path:
+        try:
+            loaded = _load_sharegpt_dataset(dataset_path, dataset_size, min_tokens)
+            with _prompt_pool_lock:
+                _prompt_pool = loaded
+        except Exception as exc:
+            print(f"[Dataset] 加载失败，将使用固定 prompt：{exc}")
+
+def _report_tpm_qpm(completion_tokens: int, total_tokens: int):
+    """每次请求结束后调用，累加计数并上报当前实时 TPM / QPM。"""
+    global _total_requests, _total_output_tokens, _total_tokens
+    with _stats_lock:
+        _total_requests += 1
+        _total_output_tokens += completion_tokens
+        _total_tokens += total_tokens
+        elapsed_min = (time.time() - _test_start_time) / 60.0
+        if elapsed_min <= 0:
+            return
+        qpm = _total_requests / elapsed_min
+        output_tpm = _total_output_tokens / elapsed_min
+        total_tpm = _total_tokens / elapsed_min
+
+    # 上报到 locust 统计面板（利用 response_time 字段存放速率值）
+    events.request.fire(
+        request_type="Rate",
+        name="5_QPM_每分钟请求数",
+        response_time=int(qpm),
+        response_length=0,
+        exception=None,
+        context={},
+    )
+    events.request.fire(
+        request_type="Rate",
+        name="6_Output_TPM_每分钟输出Token数",
+        response_time=int(output_tpm),
+        response_length=0,
+        exception=None,
+        context={},
+    )
+    events.request.fire(
+        request_type="Rate",
+        name="7_Total_TPM_每分钟总Token数",
+        response_time=int(total_tpm),
+        response_length=0,
+        exception=None,
+        context={},
+    )
+# ─────────────────────────────────────────────────────────────────────
 
 class LLMLoadTestUser(FastHttpUser):
     host = "https://www.sophnet.com"
@@ -28,10 +187,11 @@ class LLMLoadTestUser(FastHttpUser):
             "Content-Type": "application/json"
         }
 
+        prompt = _get_prompt(self.environment)
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "user", "content": f"请详细分析人工智能在未来医疗领域的应用，至少输出1000字。时间戳：{time.time()}"}
+                {"role": "user", "content": prompt}
             ],
             "stream": True,
             # 兼容 OpenAI 格式的网关，要求在最后一个 chunk 返回 usage 统计
@@ -122,6 +282,9 @@ class LLMLoadTestUser(FastHttpUser):
                 # 将 Token 数量作为指标上报（技巧：利用 response_time 字段上报数字，方便后续查看均值）
                 events.request.fire(request_type="Metric_Token", name="3_Output_Tokens_Per_Req", response_time=completion_tokens, response_length=0, exception=None, context={})
                 events.request.fire(request_type="Metric_Token", name="4_Total_Tokens_Per_Req", response_time=(prompt_tokens + completion_tokens), response_length=0, exception=None, context={})
+
+                # 上报 TPM / QPM 实时速率指标
+                _report_tpm_qpm(completion_tokens, prompt_tokens + completion_tokens)
 
                 # 正常完成
                 response.success()
