@@ -7,6 +7,8 @@
 #
 # 常用选项:
 #   --num-prompts N        发送的请求总数 (默认: 20)
+#   --dataset-name sharegpt 数据集名称
+#   --dataset-path /Volumes/S500Pro/token/ShareGPT_V3_unfiltered_cleaned_split.json 数据集本地路径（适用于已经预下载好的情况）
 #   --request-rate R       每秒请求数, inf 表示立即全发 (默认: inf)
 #   --max-concurrency N    最大并发数 (默认: 5)
 #   --random-input-len N   随机输入长度 (默认: 128)
