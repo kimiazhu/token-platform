@@ -9,7 +9,11 @@ from locust import HttpUser, FastHttpUser, task, between, events
 from locust import argument_parser
 import requests.exceptions
 
-load_dotenv()  # Load variables from .env
+# 找到相对于 locustfile.py 的根目录 .env
+current_dir = os.path.dirname(os.path.abspath(__file__))
+root_dir = os.path.dirname(current_dir)
+dotenv_path = os.path.join(root_dir, '.env')
+load_dotenv(dotenv_path=dotenv_path)
 
 # ── ShareGPT Dataset 支持 ─────────────────────────────────────────────
 # 命令行参数：

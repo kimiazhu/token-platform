@@ -9,7 +9,7 @@ locust -f benchmark/locustfile.py --headless -u 2 -r 2 -t 5m
 ```bash
 # workers:
 # 使用 nohup 将进程放到后台运行，并将日志输出到 worker.log
-nohup locust -f locustfile.py --worker --master-host=<master_ip> > worker.log 2>&1 &
+nohup locust -f benchmark/locustfile.py --worker --master-host=127.0.0.1 > worker.log 2>&1 &
 # 根据机器的 CPU 核心数，重复执行上述命令多次
 
 ############################################################################
@@ -17,7 +17,7 @@ nohup locust -f locustfile.py --worker --master-host=<master_ip> > worker.log 2>
 locust -f benchmark/locustfile.py \
     --master \
     --headless \
-    -u 2000 \
+    -u 1000 \
     -r 50 \
     --run-time 10m \
     --expect-workers 3 \
@@ -32,8 +32,10 @@ locust -f benchmark/locustfile.py \
 ```bash
 # 从 ShareGPT 数据集随机取 1000 条 prompt 压测
 # 数据集下载地址：wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
+# 如下载不到可以用hg镜像站：export HF_ENDPOINT=https://hf-mirror.com
 locust -f benchmark/locustfile.py --headless -u 100 -r 5 -t 300s \
   --dataset /Volumes/S500Pro/token/ShareGPT_V3_unfiltered_cleaned_split.json
+
 # 全量加载，并过滤掉字符数少于 50 的短 prompt
 locust -f benchmark/locustfile.py --headless -u 50 -r 5 -t 300s \
   --dataset /Volumes/S500Pro/token/ShareGPT_V3_unfiltered_cleaned_split.json \
