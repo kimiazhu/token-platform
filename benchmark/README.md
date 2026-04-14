@@ -1,5 +1,25 @@
 
 
+# LLM 性能压力测试 (Locust)
+
+本项目使用 Locust 进行 LLM 接口的压力测试，支持流式输出、TTFT/TPOT 指标统计以及 ShareGPT 数据集采样。
+
+## 环境变量配置
+
+测试脚本会自动加载根目录下的 `.env` 文件。你可以通过环境变量或 `.env` 文件配置以下参数：
+
+| 环境变量 | 含义 | 默认值 |
+| :--- | :--- | :--- |
+| `API_KEY` | **(必填)** 用于 API 认证的 Key | - |
+| `BASE_URL` | 目标服务的 Base URL | `https://www.sophnet.com` |
+| `API_PATH` | Chat Completion 接口路径 | `/api/open-apis/v1/chat/completions` |
+| `MODEL` | 模型名称 | `GLM-5` |
+| `LOCUST_DATASET` | 本地 ShareGPT JSON 数据集路径 | `""` (不设置则使用固定 prompt) |
+| `LOCUST_DATASET_SIZE` | 从数据集中随机采样的 Prompt 数量 | `1000` (设置为 0 则全量加载) |
+| `LOCUST_MIN_TOKENS` | 过滤掉字符数（注：代码中按字符长度过滤）少于此值的文本 | `0` |
+
+---
+
 ## 单个节点测试：
 ```bash
 locust -f benchmark/locustfile.py --headless -u 2 -r 2 -t 5m

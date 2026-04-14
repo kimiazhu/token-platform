@@ -171,7 +171,7 @@ def _report_tpm_qpm(completion_tokens: int, total_tokens: int):
 # ─────────────────────────────────────────────────────────────────────
 
 class LLMLoadTestUser(FastHttpUser):
-    host = "https://www.sophnet.com"
+    host = "https://www.sophnet.com" if not os.environ.get("BASE_URL") else os.environ.get("BASE_URL")
     wait_time = between(0.0, 0.1)
 
     def on_start(self):
@@ -179,13 +179,13 @@ class LLMLoadTestUser(FastHttpUser):
         if not api_key:
             raise ValueError("环境变量 'API_KEY' 未设置，请配置后再运行测试。")
         self.api_key = api_key
-        self.model = "GLM-5"
+        self.model = "GLM-5" if not os.environ.get("MODEL") else os.environ.get("MODEL")
         # 设置请求的底层超时时间为 35 分钟，防止底层库过早断开
         # self.client.timeout = 2100
 
     @task
     def chat_completion(self):
-        url = "/api/open-apis/v1/chat/completions"
+        url = "/api/open-apis/v1/chat/completions" if not os.environ.get("API_PATH") else os.environ.get("API_PATH")
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
