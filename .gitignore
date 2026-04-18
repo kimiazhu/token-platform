@@ -53,3 +53,6 @@ tags
 .aider*
 .DS_Store
 ~$*
+
+result/
+results/
